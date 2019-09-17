@@ -1,0 +1,20 @@
+{
+    "configurations": [
+        {
+            "name": "ROS2",
+            "includePath": [
+                "${workspaceFolder}/../../../install/controller_interface/include",
+                "${workspaceFolder}/../../../install/hardware_interface/include",
+                "${workspaceFolder}/../../../install/ros2_control_helpers/include",
+                "${workspaceFolder}/../../../install/ros2_control_interfaces/include",
+                "/opt/ros/dashing/include",
+                "${workspaceFolder}/**"
+            ],
+            "intelliSenseMode": "gcc-x64",
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "c11",
+            "cppStandard": "c++17"
+        }
+    ],
+    "version": 4
+}
