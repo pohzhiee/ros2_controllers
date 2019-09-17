@@ -27,6 +27,7 @@ add_library(
   src/joint_trajectory_controller.cpp
   src/joint_state_controller.cpp
   src/joint_velocity_controller.cpp
+  src/joint_position_controller.cpp
   src/trajectory.cpp
 )
 target_include_directories(default_controllers PRIVATE include)
@@ -51,6 +52,7 @@ controller_manager_register_controller(
   "ros_controllers::JointStateController"
   "ros_controllers::JointTrajectoryController"
   "ros_controllers::JointVelocityController"
+  "ros_controllers::JointPositionController"
 )
 # Causes the visibility macros to use dllexport rather than dllimport,
 # which is appropriate when building the dll but not consuming it.
