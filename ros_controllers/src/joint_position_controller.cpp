@@ -91,30 +91,61 @@ JointPositionController::on_configure(const rclcpp_lifecycle::State &previous_st
         return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::ERROR;
     }
 
-    previous_update_time_ = this->get_lifecycle_node()->get_clock()->now();    
+    previous_update_time_ = this->get_lifecycle_node()->get_clock()->now();
     desired_pos_vec_ = std::vector<double>();
     desired_pos_vec_.resize(registered_joint_state_handles_.size());
 
     return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 }
 
-void JointPositionController::desired_position_subscrition_callback(ros2_control_interfaces::msg::JointControl::UniquePtr msg){
-        RCLCPP_INFO(this->get_lifecycle_node()->get_logger(), "Message received, length: %u", msg->desired_positions.size());
-        auto msg_size = msg->desired_positions.size();
-        auto vec_size = desired_pos_vec_.size();
-        if(msg_size > vec_size){
-            RCLCPP_WARN_ONCE(this->get_lifecycle_node()->get_logger(), "Subscribed desired position more than robot can handle, truncating...");
-            msg_size = vec_size;
+void JointPositionController::desired_position_subscrition_callback(ros2_control_interfaces::msg::JointControl::UniquePtr msg)
+{
+    // RCLCPP_INFO(this->get_lifecycle_node()->get_logger(), "Message received, length: %u", msg->desired_positions.size());
+    auto msg_size = msg->desired_positions.size();
+    auto names_size = msg->joint_names.size();
+    auto vec_size = desired_pos_vec_.size();
+    if (names_size != msg_size)
+    {
+        names_size = 0;
+        RCLCPP_WARN_ONCE(this->get_lifecycle_node()->get_logger(),
+                         "Number of joint names don't correspond to number of desired positions, ignoring names");
+    }
+    if (msg_size > vec_size)
+    {
+        RCLCPP_WARN_ONCE(this->get_lifecycle_node()->get_logger(), "Subscribed desired position more than robot can handle, truncating...");
+        msg_size = vec_size;
+    }
+    else if (msg_size < vec_size)
+    {
+        RCLCPP_WARN_ONCE(this->get_lifecycle_node()->get_logger(),
+                         "Subscribed desired position less than total joints in robot, ignoring control for joints at the end...");
+    }
+    // If number of joint names matches number of desired positions, try to find the index of the position corresponding to each joint name
+    // Such that the input data could be mapped correctly to the internal data structure using joint names
+    if (names_size != 0)
+    {
+        for (size_t i = 0; i < msg->joint_names.size(); i++)
+        {
+            std::string &msg_joint_name = msg->joint_names[i];
+            for (size_t j = 0; j < registered_joint_state_handles_.size(); j++)
+            {
+                auto &state_handle = registered_joint_state_handles_[j];
+                auto name = state_handle->get_name();
+                if (msg_joint_name.compare(name) == 0)
+                {
+                    desired_pos_vec_[j] = msg->desired_positions[i];
+                }
+            }
         }
-        else if(msg_size < vec_size){
-            RCLCPP_WARN_ONCE(this->get_lifecycle_node()->get_logger(), 
-            "Subscribed desired position less than total joints in robot, ignoring control for joints at the end...");
-        }
-        for(size_t i = 0;i<msg_size;i++){
+    }
+    else
+    {
+        for (size_t i = 0; i < msg_size; i++)
+        {
             desired_pos_vec_[i] = msg->desired_positions[i];
         }
+    }
 }
-
 
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 JointPositionController::on_activate(const rclcpp_lifecycle::State &previous_state)
@@ -132,14 +163,14 @@ JointPositionController::on_activate(const rclcpp_lifecycle::State &previous_sta
         return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::ERROR;
     }
     auto topicName = robotName + "/control";
-    subscription_ = this->get_lifecycle_node()->create_subscription<ros2_control_interfaces::msg::JointControl>(topicName, rclcpp::SensorDataQoS(), 
-    std::bind(&JointPositionController::desired_position_subscrition_callback, this, std::placeholders::_1));
+    subscription_ = this->get_lifecycle_node()->create_subscription<ros2_control_interfaces::msg::JointControl>(topicName, rclcpp::SensorDataQoS(),
+                                                                                                                std::bind(&JointPositionController::desired_position_subscrition_callback, this, std::placeholders::_1));
 
     for (auto &j : registered_joint_cmd_handles_)
     {
         auto controllerName = j->get_name();
         //TODO: get Pid gains from controller parameter server
-        pid_controllers_.push_back(std::make_unique<control_helpers::Pid>(control_helpers::Pid::Gains(1, 0, 0, 0, 0, false)));
+        pid_controllers_.push_back(std::make_unique<control_helpers::Pid>(control_helpers::Pid::Gains(4, 0.5, 0.5, 0, 0, false)));
     }
     return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 }
