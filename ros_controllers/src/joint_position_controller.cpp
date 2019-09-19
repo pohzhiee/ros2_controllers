@@ -170,7 +170,7 @@ JointPositionController::on_activate(const rclcpp_lifecycle::State &previous_sta
     {
         auto controllerName = j->get_name();
         //TODO: get Pid gains from controller parameter server
-        pid_controllers_.push_back(std::make_unique<control_helpers::Pid>(control_helpers::Pid::Gains(4, 0.5, 0.5, 0, 0, false)));
+        pid_controllers_.push_back(std::make_shared<control_helpers::Pid>(control_helpers::Pid::Gains(4, 0.5, 0.5, 0, 0, false)));
     }
     return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 }
