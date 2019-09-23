@@ -16,7 +16,10 @@
 #include "ros_controllers/joint_position_controller.hpp"
 
 #include <string>
+#include <sstream>
+#include <random>
 #include <memory>
+#include <exception>
 
 #include "lifecycle_msgs/msg/transition.hpp"
 
@@ -26,6 +29,31 @@
 
 namespace ros_controllers
 {
+
+//Helper functions
+unsigned int random_char()
+{
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, 255);
+    return dis(gen);
+}
+
+std::string generate_hex(const unsigned int len)
+{
+    std::stringstream ss;
+    for (size_t i = 0; i < len; i++)
+    {
+        const auto rc = random_char();
+        std::stringstream hexstream;
+        hexstream << std::hex << rc;
+        auto hex = hexstream.str();
+        ss << (hex.length() < 2 ? '0' + hex : hex);
+    }
+    return ss.str();
+}
+
+
 
 JointPositionController::JointPositionController()
     : controller_interface::ControllerInterface()
@@ -147,6 +175,55 @@ void JointPositionController::desired_position_subscrition_callback(ros2_control
     }
 }
 
+control_helpers::Pid::Gains JointPositionController::get_controller_pid()
+{
+    using GetControllerPid = parameter_server_interfaces::srv::GetControllerPid;
+    using namespace std::chrono_literals;
+
+    auto gain = control_helpers::Pid::Gains();
+    auto nodeTemp = std::make_shared<rclcpp::Node>("n_"+ generate_hex(10));
+    gain.p_gain_ = 1;
+    auto client = nodeTemp->create_client<GetControllerPid>("/GetControllerPid");
+    client->wait_for_service(1.5s);
+    if (client->service_is_ready())
+    {
+        auto req = std::make_shared<parameter_server_interfaces::srv::GetControllerPid::Request>();
+        req->controller = this->get_lifecycle_node()->get_name();
+        auto resp = client->async_send_request(req);
+        RCLCPP_INFO(this->get_lifecycle_node()->get_logger(), "Getting PID parameters for controller %s...", req->controller.c_str());
+        auto spin_status = rclcpp::spin_until_future_complete(nodeTemp, resp, 5s);
+        if (spin_status == rclcpp::executor::FutureReturnCode::SUCCESS)
+        {
+            auto status = resp.wait_for(1s);
+            if (status == std::future_status::ready)
+            {
+                auto res = resp.get();
+                gain.p_gain_ = res->p;
+                gain.i_gain_ = res->i;
+                gain.d_gain_ = res->d;
+                gain.i_max_ = res->i_max;
+                gain.i_min_ = res->i_min;
+                gain.antiwindup_ = res->antiwindup;
+                return gain;
+            }
+            else
+            {
+                RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "GetControllerPid service failed to execute");
+            }
+        }
+        else
+        {
+            RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "GetControllerPid service failed to execute (spin failed)");
+        }
+    }
+    else
+    {
+        RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "GetControllerPid service failed to start, check that parameter server is launched");
+    }
+    RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "Get controller gain failed, using P only controller with gain of 1");
+    return gain;
+}
+
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 JointPositionController::on_activate(const rclcpp_lifecycle::State &previous_state)
 {
@@ -163,14 +240,21 @@ JointPositionController::on_activate(const rclcpp_lifecycle::State &previous_sta
         return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::ERROR;
     }
     auto topicName = robotName + "/control";
-    subscription_ = this->get_lifecycle_node()->create_subscription<ros2_control_interfaces::msg::JointControl>(topicName, rclcpp::SensorDataQoS(),
-                                                                                                                std::bind(&JointPositionController::desired_position_subscrition_callback, this, std::placeholders::_1));
-
+    subscription_ = this->get_lifecycle_node()->create_subscription<ros2_control_interfaces::msg::JointControl>(
+        topicName, rclcpp::SensorDataQoS(), std::bind(&JointPositionController::desired_position_subscrition_callback, this, std::placeholders::_1));
+    auto pidParams = control_helpers::Pid::Gains();
+    pidParams.p_gain_ = 1.0;
+    try{
+        pidParams = get_controller_pid();
+    }
+    catch(std::exception &e){
+        RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "Error: %s", e.what());
+        throw e;
+    }
+    RCLCPP_INFO(this->get_lifecycle_node()->get_logger(), "Finished getting pid params, creating pid controllers");
     for (auto &j : registered_joint_cmd_handles_)
     {
-        auto controllerName = j->get_name();
-        //TODO: get Pid gains from controller parameter server
-        pid_controllers_.push_back(std::make_shared<control_helpers::Pid>(control_helpers::Pid::Gains(4, 0.5, 0.5, 0, 0, false)));
+        pid_controllers_.push_back(std::make_shared<control_helpers::Pid>(pidParams));
     }
     return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 }
@@ -209,6 +293,7 @@ JointPositionController::on_shutdown(const rclcpp_lifecycle::State &previous_sta
 
     return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 } //end of on_shutdown()
+
 
 } // namespace ros_controllers
 

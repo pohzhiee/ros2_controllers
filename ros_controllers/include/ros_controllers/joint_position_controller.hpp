@@ -26,6 +26,7 @@
 #include "ros_controllers/visibility_control.h"
 #include "sensor_msgs/msg/joint_state.hpp"
 #include "ros2_control_interfaces/msg/joint_control.hpp"
+#include "parameter_server_interfaces/srv/get_controller_pid.hpp"
 #include "ros2_control_helpers/pid.hpp"
 
 namespace ros_controllers
@@ -34,54 +35,55 @@ namespace ros_controllers
 class JointPositionController : public controller_interface::ControllerInterface
 {
 public:
-  ROS_CONTROLLERS_PUBLIC
-  JointPositionController();
+    ROS_CONTROLLERS_PUBLIC
+    JointPositionController();
 
-  ROS_CONTROLLERS_PUBLIC
-  controller_interface::controller_interface_ret_t
-  init(
-    std::weak_ptr<hardware_interface::RobotHardware> robot_hardware,
-    const std::string & controller_name) override;
+    ROS_CONTROLLERS_PUBLIC
+    controller_interface::controller_interface_ret_t
+    init(
+        std::weak_ptr<hardware_interface::RobotHardware> robot_hardware,
+        const std::string &controller_name) override;
 
-  ROS_CONTROLLERS_PUBLIC
-  controller_interface::controller_interface_ret_t
-  update() override;
+    ROS_CONTROLLERS_PUBLIC
+    controller_interface::controller_interface_ret_t
+    update() override;
 
-  ROS_CONTROLLERS_PUBLIC
-  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
-  on_configure(const rclcpp_lifecycle::State & previous_state) override;
+    ROS_CONTROLLERS_PUBLIC
+    rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+    on_configure(const rclcpp_lifecycle::State &previous_state) override;
 
-  ROS_CONTROLLERS_PUBLIC
-  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
-  on_activate(const rclcpp_lifecycle::State & previous_state) override;
+    ROS_CONTROLLERS_PUBLIC
+    rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+    on_activate(const rclcpp_lifecycle::State &previous_state) override;
 
-  ROS_CONTROLLERS_PUBLIC
-  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
-  on_deactivate(const rclcpp_lifecycle::State & previous_state) override;
+    ROS_CONTROLLERS_PUBLIC
+    rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+    on_deactivate(const rclcpp_lifecycle::State &previous_state) override;
 
-  ROS_CONTROLLERS_PUBLIC
-  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
-  on_cleanup(const rclcpp_lifecycle::State & previous_state) override;
+    ROS_CONTROLLERS_PUBLIC
+    rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+    on_cleanup(const rclcpp_lifecycle::State &previous_state) override;
 
-  ROS_CONTROLLERS_PUBLIC
-  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
-  on_error(const rclcpp_lifecycle::State & previous_state) override;
+    ROS_CONTROLLERS_PUBLIC
+    rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+    on_error(const rclcpp_lifecycle::State &previous_state) override;
 
-  ROS_CONTROLLERS_PUBLIC
-  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
-  on_shutdown(const rclcpp_lifecycle::State & previous_state) override;
+    ROS_CONTROLLERS_PUBLIC
+    rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+    on_shutdown(const rclcpp_lifecycle::State &previous_state) override;
 
 private:
-  std::vector<hardware_interface::JointCommandHandle *> registered_joint_cmd_handles_;
-  std::vector<const hardware_interface::JointStateHandle *> registered_joint_state_handles_;
-  std::vector<std::shared_ptr<control_helpers::Pid>> pid_controllers_;
-  std::vector<double> desired_pos_vec_;
-  rclcpp::Subscription<ros2_control_interfaces::msg::JointControl>::SharedPtr subscription_;
-  rclcpp::Time previous_update_time_;
+    std::vector<hardware_interface::JointCommandHandle *> registered_joint_cmd_handles_;
+    std::vector<const hardware_interface::JointStateHandle *> registered_joint_state_handles_;
+    std::vector<std::shared_ptr<control_helpers::Pid>> pid_controllers_;
+    std::vector<double> desired_pos_vec_;
+    rclcpp::Subscription<ros2_control_interfaces::msg::JointControl>::SharedPtr subscription_;
+    rclcpp::Time previous_update_time_;
 
-  void desired_position_subscrition_callback(ros2_control_interfaces::msg::JointControl::UniquePtr msg);
+    control_helpers::Pid::Gains get_controller_pid();
+    void desired_position_subscrition_callback(ros2_control_interfaces::msg::JointControl::UniquePtr msg);
 };
 
-}  // namespace ros_controllers
+} // namespace ros_controllers
 
-#endif  // ROS_CONTROLLERS__JOINT_POSITION_CONTROLLER_HPP_
+#endif // ROS_CONTROLLERS__JOINT_POSITION_CONTROLLER_HPP_

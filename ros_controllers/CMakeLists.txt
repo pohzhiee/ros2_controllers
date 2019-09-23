@@ -20,6 +20,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
 find_package(ros2_control_helpers REQUIRED)
 find_package(ros2_control_interfaces REQUIRED)
+find_package(parameter_server_interfaces REQUIRED)
 
 add_library(
   default_controllers
@@ -46,6 +47,7 @@ ament_target_dependencies(
   "trajectory_msgs"
   "ros2_control_helpers"
   "ros2_control_interfaces"
+  "parameter_server_interfaces"
 )
 controller_manager_register_controller(
   default_controllers
@@ -81,6 +83,7 @@ ament_export_dependencies(
   trajectory_msgs
   ros2_control_helpers
   ros2_control_interfaces
+  parameter_server_interfaces
 )
 ament_export_include_directories(
   include
