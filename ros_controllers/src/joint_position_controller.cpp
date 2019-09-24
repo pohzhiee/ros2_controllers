@@ -53,8 +53,6 @@ std::string generate_hex(const unsigned int len)
     return ss.str();
 }
 
-
-
 JointPositionController::JointPositionController()
     : controller_interface::ControllerInterface()
 {
@@ -82,13 +80,27 @@ JointPositionController::update()
     auto timeNow = this->get_lifecycle_node()->get_clock()->now();
     auto timeElapsed = timeNow - previous_update_time_;
     previous_update_time_ = timeNow;
+    auto pos_map = std::map<std::string, double>();
+    for (auto &state : registered_joint_state_handles_)
+    {
+        pos_map[state->get_name()] = state->get_position();
+    }
+
     for (size_t i = 0; i < registered_joint_state_handles_.size(); i++)
     {
         auto state_handle = registered_joint_state_handles_[i];
-        auto error = desired_pos_vec_[i] - state_handle->get_position();
-        auto cmd = pid_controllers_[i]->compute_command(error, timeElapsed);
-        auto cmd_handle = registered_joint_cmd_handles_[i];
-        cmd_handle->set_cmd(cmd);
+        auto joint_name = state_handle->get_name();
+        auto curr_pos = state_handle->get_position();
+        auto fp = [&joint_name](const hardware_interface::JointCommandHandle *cmd_handle) -> bool { return cmd_handle->get_name().compare(joint_name) == 0; };
+        auto joint_cmd_iter = std::find_if(registered_joint_cmd_handles_.cbegin(), registered_joint_cmd_handles_.cend(), fp);
+        if (joint_cmd_iter != registered_joint_cmd_handles_.cend())
+        {
+            auto cmd_handle = *joint_cmd_iter;
+            auto desired_pos = desired_pos_map_[joint_name];
+            auto error = desired_pos - curr_pos;
+            auto cmd = pid_controllers_map_[joint_name]->compute_command(error, timeElapsed);
+            cmd_handle->set_cmd(cmd);
+        }
     }
     return hardware_interface::HW_RET_OK;
 }
@@ -98,11 +110,30 @@ JointPositionController::on_configure(const rclcpp_lifecycle::State &previous_st
 {
     (void)previous_state;
 
+    auto controller_joints = get_controller_joints();
     if (auto sptr = robot_hardware_.lock())
     {
-        registered_joint_state_handles_ = sptr->get_registered_joint_state_handles();
-        registered_joint_cmd_handles_ = sptr->get_registered_joint_command_handles();
+        auto state_handles = sptr->get_registered_joint_state_handles();
+        auto cmd_handles = sptr->get_registered_joint_command_handles();
+        // Register the appropriate handles based on what joints this controller is supposed to control
+        for (auto &joint_name : controller_joints)
+        {
+            auto fp = [&joint_name](const hardware_interface::JointStateHandle *state_handle) -> bool { return state_handle->get_name().compare(joint_name) == 0; };
+            auto stateElem = std::find_if(state_handles.cbegin(), state_handles.cend(), fp);
+            if (stateElem != state_handles.cend())
+            {
+                registered_joint_state_handles_.push_back(*stateElem);
+            }
 
+            auto fp2 = [&joint_name](const hardware_interface::JointCommandHandle *cmd_handle) -> bool { return cmd_handle->get_name().compare(joint_name) == 0; };
+            auto cmdElem = std::find_if(cmd_handles.cbegin(), cmd_handles.cend(), fp2);
+            if (cmdElem != cmd_handles.cend())
+            {
+                registered_joint_cmd_handles_.push_back(*cmdElem);
+            }
+        }
+
+        // Error handling
         if (registered_joint_cmd_handles_.size() != registered_joint_state_handles_.size())
         {
             RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "Number of state and command handles must be the same. Exiting.");
@@ -113,15 +144,25 @@ JointPositionController::on_configure(const rclcpp_lifecycle::State &previous_st
             RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "0 joint state handles registered. Exiting.");
             return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::ERROR;
         }
+        if (registered_joint_cmd_handles_.size() == 0)
+        {
+            RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "0 joint command handles registered. Exiting.");
+            return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::ERROR;
+        }
     }
     else
     {
         return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::ERROR;
     }
 
+    for (auto &cmd_handle : registered_joint_cmd_handles_)
+    {
+        desired_pos_map_.insert({cmd_handle->get_name(), 0.0});
+    }
+
     previous_update_time_ = this->get_lifecycle_node()->get_clock()->now();
-    desired_pos_vec_ = std::vector<double>();
-    desired_pos_vec_.resize(registered_joint_state_handles_.size());
+    // desired_pos_vec_ = std::vector<double>();
+    // desired_pos_vec_.resize(registered_joint_state_handles_.size());
 
     return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 }
@@ -131,47 +172,31 @@ void JointPositionController::desired_position_subscrition_callback(ros2_control
     // RCLCPP_INFO(this->get_lifecycle_node()->get_logger(), "Message received, length: %u", msg->desired_positions.size());
     auto msg_size = msg->desired_positions.size();
     auto names_size = msg->joint_names.size();
-    auto vec_size = desired_pos_vec_.size();
+    auto cmd_handle_size = registered_joint_cmd_handles_.size();
+    // TODO: Error handling when data don't match expectations
     if (names_size != msg_size)
     {
         names_size = 0;
         RCLCPP_WARN_ONCE(this->get_lifecycle_node()->get_logger(),
-                         "Number of joint names don't correspond to number of desired positions, ignoring names");
+                         "Number of joint names don't correspond to number of desired positions, ignoring data");
+        return;
     }
-    if (msg_size > vec_size)
+    if (msg_size > cmd_handle_size)
     {
-        RCLCPP_WARN_ONCE(this->get_lifecycle_node()->get_logger(), "Subscribed desired position more than robot can handle, truncating...");
-        msg_size = vec_size;
+        RCLCPP_WARN_ONCE(this->get_lifecycle_node()->get_logger(), "Subscribed desired position more than robot can handle, adding to map anyway");
     }
-    else if (msg_size < vec_size)
+    else if (msg_size < cmd_handle_size)
     {
         RCLCPP_WARN_ONCE(this->get_lifecycle_node()->get_logger(),
                          "Subscribed desired position less than total joints in robot, ignoring control for joints at the end...");
     }
-    // If number of joint names matches number of desired positions, try to find the index of the position corresponding to each joint name
-    // Such that the input data could be mapped correctly to the internal data structure using joint names
-    if (names_size != 0)
+
+    // Add data to hash table
+    for (size_t i = 0; i < msg_size; i++)
     {
-        for (size_t i = 0; i < msg->joint_names.size(); i++)
-        {
-            std::string &msg_joint_name = msg->joint_names[i];
-            for (size_t j = 0; j < registered_joint_state_handles_.size(); j++)
-            {
-                auto &state_handle = registered_joint_state_handles_[j];
-                auto name = state_handle->get_name();
-                if (msg_joint_name.compare(name) == 0)
-                {
-                    desired_pos_vec_[j] = msg->desired_positions[i];
-                }
-            }
-        }
-    }
-    else
-    {
-        for (size_t i = 0; i < msg_size; i++)
-        {
-            desired_pos_vec_[i] = msg->desired_positions[i];
-        }
+        auto name = msg->joint_names[i];
+        auto desired_pos = msg->desired_positions[i];
+        desired_pos_map_[name] = desired_pos;
     }
 }
 
@@ -181,47 +206,104 @@ control_helpers::Pid::Gains JointPositionController::get_controller_pid()
     using namespace std::chrono_literals;
 
     auto gain = control_helpers::Pid::Gains();
-    auto nodeTemp = std::make_shared<rclcpp::Node>("n_"+ generate_hex(10));
-    gain.p_gain_ = 1;
+    auto nodeTemp = std::make_shared<rclcpp::Node>("n_" + generate_hex(10));
     auto client = nodeTemp->create_client<GetControllerPid>("/GetControllerPid");
     client->wait_for_service(1.5s);
     if (client->service_is_ready())
     {
-        auto req = std::make_shared<parameter_server_interfaces::srv::GetControllerPid::Request>();
-        req->controller = this->get_lifecycle_node()->get_name();
-        auto resp = client->async_send_request(req);
-        RCLCPP_INFO(this->get_lifecycle_node()->get_logger(), "Getting PID parameters for controller %s...", req->controller.c_str());
-        auto spin_status = rclcpp::spin_until_future_complete(nodeTemp, resp, 5s);
-        if (spin_status == rclcpp::executor::FutureReturnCode::SUCCESS)
+
+        unsigned int spinCount = 0;
+        while (spinCount < 6)
         {
-            auto status = resp.wait_for(1s);
-            if (status == std::future_status::ready)
+
+            auto req = std::make_shared<parameter_server_interfaces::srv::GetControllerPid::Request>();
+            req->controller = this->get_lifecycle_node()->get_name();
+            auto resp = client->async_send_request(req);
+            RCLCPP_INFO(this->get_lifecycle_node()->get_logger(), "Getting PID parameters for controller %s...", req->controller.c_str());
+            auto spin_status = rclcpp::spin_until_future_complete(nodeTemp, resp, 1s);
+            if (spin_status == rclcpp::executor::FutureReturnCode::SUCCESS)
             {
-                auto res = resp.get();
-                gain.p_gain_ = res->p;
-                gain.i_gain_ = res->i;
-                gain.d_gain_ = res->d;
-                gain.i_max_ = res->i_max;
-                gain.i_min_ = res->i_min;
-                gain.antiwindup_ = res->antiwindup;
-                return gain;
+                auto status = resp.wait_for(0.2s);
+                if (status == std::future_status::ready)
+                {
+                    auto res = resp.get();
+                    gain.p_gain_ = res->p;
+                    gain.i_gain_ = res->i;
+                    gain.d_gain_ = res->d;
+                    gain.i_max_ = res->i_max;
+                    gain.i_min_ = res->i_min;
+                    gain.antiwindup_ = res->antiwindup;
+                    return gain;
+                }
+                else
+                {
+                    RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "GetControllerPid service failed to execute");
+                    spinCount++;
+                }
             }
             else
             {
-                RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "GetControllerPid service failed to execute");
+                RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "GetControllerPid service failed to execute (spin failed)");
+                spinCount++;
             }
-        }
-        else
-        {
-            RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "GetControllerPid service failed to execute (spin failed)");
         }
     }
     else
     {
         RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "GetControllerPid service failed to start, check that parameter server is launched");
     }
-    RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "Get controller gain failed, using P only controller with gain of 1");
+    RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "Get controller gain failed");
+    gain.p_gain_ = -1;
     return gain;
+}
+
+std::vector<std::string> JointPositionController::get_controller_joints()
+{
+    using GetControllerJoints = parameter_server_interfaces::srv::GetControllerJoints;
+    using namespace std::chrono_literals;
+    std::vector<std::string> controller_joints = {};
+    auto nodeTemp = std::make_shared<rclcpp::Node>("n_" + generate_hex(10));
+    auto client = nodeTemp->create_client<GetControllerJoints>("/GetControllerJoints");
+    client->wait_for_service(1.5s);
+    if (client->service_is_ready())
+    {
+        unsigned int spinCount = 0;
+
+        while (spinCount < 8)
+        {
+            auto req = std::make_shared<parameter_server_interfaces::srv::GetControllerJoints::Request>();
+            req->controller = this->get_lifecycle_node()->get_name();
+            auto resp = client->async_send_request(req);
+            RCLCPP_INFO(this->get_lifecycle_node()->get_logger(), "Getting joints for controller %s...", req->controller.c_str());
+            auto spin_status = rclcpp::spin_until_future_complete(nodeTemp, resp, 3s);
+            if (spin_status == rclcpp::executor::FutureReturnCode::SUCCESS)
+            {
+                auto status = resp.wait_for(1s);
+                if (status == std::future_status::ready)
+                {
+                    auto res = resp.get();
+                    controller_joints = res->joints;
+                    return controller_joints;
+                }
+                else
+                {
+                    RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "GetControllerJoints service failed to execute");
+                    spinCount++;
+                }
+            }
+            else
+            {
+                RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "GetControllerJoints service failed to execute (spin failed)");
+                spinCount++;
+            }
+        }
+    }
+    else
+    {
+        RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "GetControllerJoints service failed to start, check that parameter server is launched");
+    }
+    // RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "Get controller joints failed");
+    return controller_joints;
 }
 
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
@@ -229,7 +311,6 @@ JointPositionController::on_activate(const rclcpp_lifecycle::State &previous_sta
 {
     (void)previous_state;
     RCLCPP_INFO(this->get_lifecycle_node()->get_logger(), "JointPositionController on_activate called");
-    pid_controllers_ = std::vector<std::shared_ptr<control_helpers::Pid>>();
     std::string robotName;
     if (auto robot_hardware = robot_hardware_.lock())
     {
@@ -243,18 +324,18 @@ JointPositionController::on_activate(const rclcpp_lifecycle::State &previous_sta
     subscription_ = this->get_lifecycle_node()->create_subscription<ros2_control_interfaces::msg::JointControl>(
         topicName, rclcpp::SensorDataQoS(), std::bind(&JointPositionController::desired_position_subscrition_callback, this, std::placeholders::_1));
     auto pidParams = control_helpers::Pid::Gains();
-    pidParams.p_gain_ = 1.0;
-    try{
-        pidParams = get_controller_pid();
+    pidParams = get_controller_pid();
+
+    // Use negative p gain as a sign of error
+    if (pidParams.p_gain_ < 0)
+    {
+        return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::ERROR;
     }
-    catch(std::exception &e){
-        RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "Error: %s", e.what());
-        throw e;
-    }
-    RCLCPP_INFO(this->get_lifecycle_node()->get_logger(), "Finished getting pid params, creating pid controllers");
+
+    RCLCPP_INFO(this->get_lifecycle_node()->get_logger(), "Creating pid controllers");
     for (auto &j : registered_joint_cmd_handles_)
     {
-        pid_controllers_.push_back(std::make_shared<control_helpers::Pid>(pidParams));
+        pid_controllers_map_[j->get_name()] = std::make_shared<control_helpers::Pid>(pidParams);
     }
     return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 }
@@ -263,7 +344,8 @@ JointPositionController::on_deactivate(const rclcpp_lifecycle::State &previous_s
 {
     (void)previous_state;
     RCLCPP_INFO(this->get_lifecycle_node()->get_logger(), "JointPositionController on_deactivate called");
-    pid_controllers_.clear();
+    pid_controllers_map_.clear();
+    subscription_ = nullptr;
     return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 } //end of on_deactivate()
 
@@ -271,6 +353,11 @@ rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 JointPositionController::on_cleanup(const rclcpp_lifecycle::State &previous_state)
 {
     (void)previous_state;
+
+    registered_joint_state_handles_.clear();
+    registered_joint_cmd_handles_.clear();
+    desired_pos_map_.clear();
+
     RCLCPP_INFO(this->get_lifecycle_node()->get_logger(), "JointPositionController on_cleanup called");
 
     return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
@@ -293,7 +380,6 @@ JointPositionController::on_shutdown(const rclcpp_lifecycle::State &previous_sta
 
     return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 } //end of on_shutdown()
-
 
 } // namespace ros_controllers
 

@@ -19,6 +19,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 #include "controller_interface/controller_interface.hpp"
 #include "hardware_interface/robot_hardware.hpp"
@@ -27,6 +28,7 @@
 #include "sensor_msgs/msg/joint_state.hpp"
 #include "ros2_control_interfaces/msg/joint_control.hpp"
 #include "parameter_server_interfaces/srv/get_controller_pid.hpp"
+#include "parameter_server_interfaces/srv/get_controller_joints.hpp"
 #include "ros2_control_helpers/pid.hpp"
 
 namespace ros_controllers
@@ -73,14 +75,17 @@ public:
     on_shutdown(const rclcpp_lifecycle::State &previous_state) override;
 
 private:
-    std::vector<hardware_interface::JointCommandHandle *> registered_joint_cmd_handles_;
-    std::vector<const hardware_interface::JointStateHandle *> registered_joint_state_handles_;
-    std::vector<std::shared_ptr<control_helpers::Pid>> pid_controllers_;
-    std::vector<double> desired_pos_vec_;
+    std::vector<hardware_interface::JointCommandHandle *> registered_joint_cmd_handles_ = {};
+    std::vector<const hardware_interface::JointStateHandle *> registered_joint_state_handles_ = {};
+    std::vector<std::shared_ptr<control_helpers::Pid>> pid_controllers_ = {};
+    // std::vector<double> desired_pos_vec_;
+    std::unordered_map<std::string, double> desired_pos_map_ = {};
+    std::unordered_map<std::string, std::shared_ptr<control_helpers::Pid>> pid_controllers_map_ = {};
     rclcpp::Subscription<ros2_control_interfaces::msg::JointControl>::SharedPtr subscription_;
     rclcpp::Time previous_update_time_;
 
     control_helpers::Pid::Gains get_controller_pid();
+    std::vector<std::string> get_controller_joints();
     void desired_position_subscrition_callback(ros2_control_interfaces::msg::JointControl::UniquePtr msg);
 };
 
