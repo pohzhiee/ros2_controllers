@@ -64,7 +64,6 @@ JointPositionController::init(std::weak_ptr<hardware_interface::RobotHardware> r
 {
     // initialize lifecycle node
     auto ret = ControllerInterface::init(robot_hardware, controller_name);
-    functional_node_ = std::make_shared<rclcpp::Node>("n_" + generate_hex(10));
     if (ret != controller_interface::CONTROLLER_INTERFACE_RET_SUCCESS)
     {
         RCLCPP_WARN(this->get_lifecycle_node()->get_logger(), "JointPositionController init unsuccesful");
@@ -170,7 +169,9 @@ JointPositionController::on_configure(const rclcpp_lifecycle::State &previous_st
 
 void JointPositionController::desired_position_subscrition_callback(ros2_control_interfaces::msg::JointControl::UniquePtr msg)
 {
-    // RCLCPP_INFO(this->get_lifecycle_node()->get_logger(), "Message received, length: %u", msg->desired_positions.size());
+    // TODO: Possible optimisation: put this callback in RobotHW instead because most of the data here is not used anyway
+    // However that optimisation will be ugly due to the need to modify the base RobotHW class as there is currently no handle
+    // for desired pos method.
     auto msg_size = msg->desired_positions.size();
     auto names_size = msg->joint_names.size();
     auto cmd_handle_size = registered_joint_cmd_handles_.size();
@@ -206,7 +207,8 @@ control_helpers::Pid::Gains JointPositionController::get_controller_pid()
     using GetControllerPid = parameter_server_interfaces::srv::GetControllerPid;
     using namespace std::chrono_literals;
     auto gain = control_helpers::Pid::Gains();
-    auto client = functional_node_->create_client<GetControllerPid>("/GetControllerPid");
+    auto temp_node = std::make_unique<rclcpp::Node>("temp_"+generate_hex(8));
+    auto client = temp_node->create_client<GetControllerPid>("/GetControllerPid");
     unsigned int retryCount = 0;
     constexpr unsigned int maxRetries = 10;
     while (retryCount < maxRetries)
@@ -223,7 +225,7 @@ control_helpers::Pid::Gains JointPositionController::get_controller_pid()
         req->controller = this->get_lifecycle_node()->get_name();
         auto resp = client->async_send_request(req);
         RCLCPP_INFO(this->get_lifecycle_node()->get_logger(), "Getting PID parameters for controller %s...", req->controller.c_str());
-        auto spin_status = rclcpp::spin_until_future_complete(functional_node_, resp, 3s);
+        auto spin_status = rclcpp::spin_until_future_complete(temp_node->get_node_base_interface(), resp, 3s);
         if (spin_status != rclcpp::executor::FutureReturnCode::SUCCESS)
         {
             retryCount++;
@@ -258,7 +260,8 @@ std::vector<std::string> JointPositionController::get_controller_joints()
     using GetControllerJoints = parameter_server_interfaces::srv::GetControllerJoints;
     using namespace std::chrono_literals;
     std::vector<std::string> controller_joints = {};
-    auto client = functional_node_->create_client<GetControllerJoints>("/GetControllerJoints");
+    auto temp_node = std::make_unique<rclcpp::Node>("temp_"+generate_hex(8));
+    auto client = temp_node->create_client<GetControllerJoints>("/GetControllerJoints");
     unsigned int retryCount = 0;
     constexpr unsigned int maxRetries = 10;
     while (retryCount < maxRetries)
@@ -275,7 +278,7 @@ std::vector<std::string> JointPositionController::get_controller_joints()
         req->controller = this->get_lifecycle_node()->get_name();
         auto resp = client->async_send_request(req);
         RCLCPP_INFO(this->get_lifecycle_node()->get_logger(), "Getting joints for controller %s...", req->controller.c_str());
-        auto spin_status = rclcpp::spin_until_future_complete(functional_node_, resp, 3s);
+        auto spin_status = rclcpp::spin_until_future_complete(temp_node->get_node_base_interface(), resp, 3s);
         if (spin_status != rclcpp::executor::FutureReturnCode::SUCCESS)
         {
             retryCount++;
