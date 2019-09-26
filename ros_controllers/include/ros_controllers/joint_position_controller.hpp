@@ -83,6 +83,7 @@ private:
     std::unordered_map<std::string, std::shared_ptr<control_helpers::Pid>> pid_controllers_map_ = {};
     rclcpp::Subscription<ros2_control_interfaces::msg::JointControl>::SharedPtr subscription_;
     rclcpp::Time previous_update_time_;
+    rclcpp::Node::SharedPtr functional_node_;
 
     control_helpers::Pid::Gains get_controller_pid();
     std::vector<std::string> get_controller_joints();

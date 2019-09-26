@@ -64,6 +64,7 @@ JointPositionController::init(std::weak_ptr<hardware_interface::RobotHardware> r
 {
     // initialize lifecycle node
     auto ret = ControllerInterface::init(robot_hardware, controller_name);
+    functional_node_ = std::make_shared<rclcpp::Node>("n_" + generate_hex(10));
     if (ret != controller_interface::CONTROLLER_INTERFACE_RET_SUCCESS)
     {
         RCLCPP_WARN(this->get_lifecycle_node()->get_logger(), "JointPositionController init unsuccesful");
@@ -204,55 +205,50 @@ control_helpers::Pid::Gains JointPositionController::get_controller_pid()
 {
     using GetControllerPid = parameter_server_interfaces::srv::GetControllerPid;
     using namespace std::chrono_literals;
-
     auto gain = control_helpers::Pid::Gains();
-    auto nodeTemp = std::make_shared<rclcpp::Node>("n_" + generate_hex(10));
-    auto client = nodeTemp->create_client<GetControllerPid>("/GetControllerPid");
-    client->wait_for_service(1.5s);
-    if (client->service_is_ready())
+    auto client = functional_node_->create_client<GetControllerPid>("/GetControllerPid");
+    unsigned int retryCount = 0;
+    constexpr unsigned int maxRetries = 10;
+    while (retryCount < maxRetries)
     {
-
-        unsigned int spinCount = 0;
-        while (spinCount < 6)
+        client->wait_for_service(1.5s);
+        if (!client->service_is_ready())
         {
-
-            auto req = std::make_shared<parameter_server_interfaces::srv::GetControllerPid::Request>();
-            req->controller = this->get_lifecycle_node()->get_name();
-            auto resp = client->async_send_request(req);
-            RCLCPP_INFO(this->get_lifecycle_node()->get_logger(), "Getting PID parameters for controller %s...", req->controller.c_str());
-            auto spin_status = rclcpp::spin_until_future_complete(nodeTemp, resp, 1s);
-            if (spin_status == rclcpp::executor::FutureReturnCode::SUCCESS)
-            {
-                auto status = resp.wait_for(0.2s);
-                if (status == std::future_status::ready)
-                {
-                    auto res = resp.get();
-                    gain.p_gain_ = res->p;
-                    gain.i_gain_ = res->i;
-                    gain.d_gain_ = res->d;
-                    gain.i_max_ = res->i_max;
-                    gain.i_min_ = res->i_min;
-                    gain.antiwindup_ = res->antiwindup;
-                    return gain;
-                }
-                else
-                {
-                    RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "GetControllerPid service failed to execute");
-                    spinCount++;
-                }
-            }
-            else
-            {
-                RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "GetControllerPid service failed to execute (spin failed)");
-                spinCount++;
-            }
+            retryCount++;
+            RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(),
+                         "GetControllerPid service failed to start, check that parameter server is launched. Retries left: %d", maxRetries - retryCount);
+            continue;
         }
+        auto req = std::make_shared<parameter_server_interfaces::srv::GetControllerPid::Request>();
+        req->controller = this->get_lifecycle_node()->get_name();
+        auto resp = client->async_send_request(req);
+        RCLCPP_INFO(this->get_lifecycle_node()->get_logger(), "Getting PID parameters for controller %s...", req->controller.c_str());
+        auto spin_status = rclcpp::spin_until_future_complete(functional_node_, resp, 3s);
+        if (spin_status != rclcpp::executor::FutureReturnCode::SUCCESS)
+        {
+            retryCount++;
+            RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "GetControllerPid service failed to execute (spin failed). Retries left: %d", maxRetries - retryCount);
+            continue;
+        }
+        auto status = resp.wait_for(1s);
+
+        if (status != std::future_status::ready)
+        {
+            retryCount++;
+            RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "GetControllerPid service failed to execute. Retries left: %d", maxRetries - retryCount);
+            continue;
+        }
+
+        auto res = resp.get();
+        gain.p_gain_ = res->p;
+        gain.i_gain_ = res->i;
+        gain.d_gain_ = res->d;
+        gain.i_max_ = res->i_max;
+        gain.i_min_ = res->i_min;
+        gain.antiwindup_ = res->antiwindup;
+        return gain;
     }
-    else
-    {
-        RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "GetControllerPid service failed to start, check that parameter server is launched");
-    }
-    RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "Get controller gain failed");
+    RCLCPP_FATAL(this->get_lifecycle_node()->get_logger(), "Get controller gain failed for controller %s", this->get_lifecycle_node()->get_name());
     gain.p_gain_ = -1;
     return gain;
 }
@@ -262,48 +258,44 @@ std::vector<std::string> JointPositionController::get_controller_joints()
     using GetControllerJoints = parameter_server_interfaces::srv::GetControllerJoints;
     using namespace std::chrono_literals;
     std::vector<std::string> controller_joints = {};
-    auto nodeTemp = std::make_shared<rclcpp::Node>("n_" + generate_hex(10));
-    auto client = nodeTemp->create_client<GetControllerJoints>("/GetControllerJoints");
-    client->wait_for_service(1.5s);
-    if (client->service_is_ready())
+    auto client = functional_node_->create_client<GetControllerJoints>("/GetControllerJoints");
+    unsigned int retryCount = 0;
+    constexpr unsigned int maxRetries = 10;
+    while (retryCount < maxRetries)
     {
-        unsigned int spinCount = 0;
-
-        while (spinCount < 8)
+        client->wait_for_service(1.5s);
+        if (!client->service_is_ready())
         {
-            auto req = std::make_shared<parameter_server_interfaces::srv::GetControllerJoints::Request>();
-            req->controller = this->get_lifecycle_node()->get_name();
-            auto resp = client->async_send_request(req);
-            RCLCPP_INFO(this->get_lifecycle_node()->get_logger(), "Getting joints for controller %s...", req->controller.c_str());
-            auto spin_status = rclcpp::spin_until_future_complete(nodeTemp, resp, 3s);
-            if (spin_status == rclcpp::executor::FutureReturnCode::SUCCESS)
-            {
-                auto status = resp.wait_for(1s);
-                if (status == std::future_status::ready)
-                {
-                    auto res = resp.get();
-                    controller_joints = res->joints;
-                    return controller_joints;
-                }
-                else
-                {
-                    RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "GetControllerJoints service failed to execute");
-                    spinCount++;
-                }
-            }
-            else
-            {
-                RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "GetControllerJoints service failed to execute (spin failed)");
-                spinCount++;
-            }
+            retryCount++;
+            RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(),
+                         "GetControllerJoints service failed to start, check that parameter server is launched. Retries left: %d", maxRetries - retryCount);
+            continue;
         }
+        auto req = std::make_shared<parameter_server_interfaces::srv::GetControllerJoints::Request>();
+        req->controller = this->get_lifecycle_node()->get_name();
+        auto resp = client->async_send_request(req);
+        RCLCPP_INFO(this->get_lifecycle_node()->get_logger(), "Getting joints for controller %s...", req->controller.c_str());
+        auto spin_status = rclcpp::spin_until_future_complete(functional_node_, resp, 3s);
+        if (spin_status != rclcpp::executor::FutureReturnCode::SUCCESS)
+        {
+            retryCount++;
+            RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "GetControllerJoints service failed to execute (spin failed). Retries left: %d", maxRetries - retryCount);
+            continue;
+        }
+        auto status = resp.wait_for(1s);
+
+        if (status != std::future_status::ready)
+        {
+            retryCount++;
+            RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "GetControllerJoints service failed to execute. Retries left: %d", maxRetries - retryCount);
+            continue;
+        }
+
+        auto res = resp.get();
+        return res->joints;
     }
-    else
-    {
-        RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "GetControllerJoints service failed to start, check that parameter server is launched");
-    }
-    // RCLCPP_ERROR(this->get_lifecycle_node()->get_logger(), "Get controller joints failed");
-    return controller_joints;
+    RCLCPP_FATAL(this->get_lifecycle_node()->get_logger(), "Unable to get joints for controller %s", this->get_lifecycle_node()->get_name());
+    return {};
 }
 
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
